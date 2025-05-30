@@ -578,7 +578,7 @@ def uninstall():
 
 # 升级脚本
 def upgrade():
-    script_url = "https://raw.githubusercontent.com/yonggekkk/argosb/main/agsb_custom_domain.py" # 假设这是最新脚本的地址
+    script_url = "https://raw.githubusercontent.com/Kuthduse/agsb/main/agsb-v2.py" # 假设这是最新脚本的地址
     print(f"正在从 {script_url} 下载最新脚本...")
     try:
         script_content = http_get(script_url)
