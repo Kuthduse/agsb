@@ -1,95 +1,113 @@
 sh
 #!/bin/bash
 
-# 设置变量
-SINGBOX_VERSION="latest"  # 或者指定具体的版本号
-CLOUDFLARED_VERSION="latest" # 或者指定具体的版本号
-INSTALL_DIR="$HOME/.local/bin"
-CONFIG_DIR="$HOME/.config"
-SINGBOX_CONFIG_DIR="$CONFIG_DIR/sing-box"
-CLOUDFLARED_CONFIG_DIR="$CONFIG_DIR/cloudflared"
-SYSTEMD_USER_DIR="$CONFIG_DIR/systemd/user"
-LOG_FILE="$HOME/singbox_argo_setup.log"
-
-# 生成随机端口 (10000-65535)
-VLESS_PORT=$((RANDOM % 55536 + 10000))
-VMESS_PORT=$((RANDOM % 55536 + 10000))
-TROJAN_PORT=$((RANDOM % 55536 + 10000))
-
-# 生成UUID
+# Define variables
+SINGBOX_VERSION="1.4.0" # Replace with the desired sing-box version
+CLOUDFLARED_VERSION="2023.10.0" # Replace with the desired cloudflared version
+SINGBOX_CONFIG_PATH="/etc/sing-box/config.json"
+CLOUDFLARED_CONFIG_PATH="/etc/cloudflared/config.yml"
+CLOUDFLARED_TUNNEL_ID="YOUR_TUNNEL_ID" # Replace with your Cloudflare Tunnel ID
+CLOUDFLARED_TUNNEL_SECRET="YOUR_TUNNEL_SECRET" # Replace with your Cloudflare Tunnel Secret
+CLOUDFLARED_DOMAIN="YOUR_DOMAIN.COM" # Replace with your domain name
 VLESS_UUID=$(uuidgen)
 VMESS_UUID=$(uuidgen)
-TROJAN_PASSWORD=$(uuidgen)
+TROJAN_PASSWORD=$(openssl rand -base64 16)
+LOG_FILE="/var/log/vps_setup.log"
 
-# 日志函数
+# --- Helper Functions ---
+
 log() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $@" | tee -a "$LOG_FILE"
+  echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$LOG_FILE"
 }
 
-# 检查命令是否存在
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
+error_exit() {
+  log "ERROR: $1"
+  exit 1
 }
 
-# 安装依赖
-install_dependencies() {
-    log "正在安装依赖..."
-    if command_exists apt; then
-        sudo apt update
-        sudo apt install -y curl uuid-runtime jq
-    elif command_exists yum; then
-        sudo yum install -y curl uuidgen jq
-    elif command_exists dnf; then
-        sudo dnf install -y curl uuidgen jq
+install_package() {
+  local package_name="$1"
+  if command -v "$package_name" &>/dev/null; then
+    log "$package_name is already installed."
+  else
+    log "Installing $package_name..."
+    if command -v apt-get &>/dev/null; then
+      sudo apt-get update || error_exit "Failed to update apt repository."
+      sudo apt-get install -y "$package_name" || error_exit "Failed to install $package_name."
+    elif command -v yum &>/dev/null; then
+      sudo yum update -y || error_exit "Failed to update yum repository."
+      sudo yum install -y "$package_name" || error_exit "Failed to install $package_name."
+    elif command -v dnf &>/dev/null; then
+      sudo dnf update -y || error_exit "Failed to update dnf repository."
+      sudo dnf install -y "$package_name" || error_exit "Failed to install $package_name."
     else
-        log "错误：不支持的包管理器。请手动安装 curl, uuidgen, jq。"
-        exit 1
+      error_exit "Unsupported package manager. Please install $package_name manually."
     fi
-    log "依赖安装完成。"
+  fi
 }
 
-# 安装 sing-box
+# --- Installation Functions ---
+
 install_singbox() {
-    log "正在安装 sing-box..."
-    mkdir -p "$INSTALL_DIR" "$SINGBOX_CONFIG_DIR" "$SYSTEMD_USER_DIR"
-    if [ "$SINGBOX_VERSION" = "latest" ]; then
-        SINGBOX_DOWNLOAD_URL=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | jq -r '.assets[] | select(.name | contains("linux-amd64")) | .browser_download_url')
-    else
-        SINGBOX_DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-amd64.tar.gz"
-    fi
-    log "下载 sing-box: $SINGBOX_DOWNLOAD_URL"
-    curl -L "$SINGBOX_DOWNLOAD_URL" | tar -xz -C "$INSTALL_DIR" --strip-components=1
-    chmod +x "$INSTALL_DIR/sing-box"
-    log "sing-box 安装完成。"
+  if [ -f "/usr/local/bin/sing-box" ]; then
+    log "sing-box is already installed."
+    return
+  fi
+
+  log "Installing sing-box version $SINGBOX_VERSION..."
+  SINGBOX_URL="https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-linux-amd64.tar.gz"
+  TEMP_DIR=$(mktemp -d)
+  wget -O "$TEMP_DIR/sing-box.tar.gz" "$SINGBOX_URL" || error_exit "Failed to download sing-box."
+  tar -xzf "$TEMP_DIR/sing-box.tar.gz" -C "$TEMP_DIR" || error_exit "Failed to extract sing-box."
+  sudo mv "$TEMP_DIR/sing-box" /usr/local/bin/ || error_exit "Failed to move sing-box binary."
+  rm -rf "$TEMP_DIR"
+  log "sing-box installed successfully."
 }
 
-# 安装 cloudflared
 install_cloudflared() {
-    log "正在安装 cloudflared..."
-    mkdir -p "$INSTALL_DIR" "$CLOUDFLARED_CONFIG_DIR"
-    if command_exists apt; then
-        curl -L https://pkg.cloudflare.com/cloudflare-argo-tunnel-release-latest.deb -o /tmp/cloudflare-argo-tunnel.deb
-        sudo dpkg -i /tmp/cloudflare-argo-tunnel.deb
-        rm /tmp/cloudflare-argo-tunnel.deb
-    elif command_exists yum || command_exists dnf; then
-        sudo rpm -ivh https://pkg.cloudflare.com/cloudflare-argo-tunnel-release-latest.rpm
-    else
-         if [ "$CLOUDFLARED_VERSION" = "latest" ]; then
-            CLOUDFLARED_DOWNLOAD_URL=$(curl -s https://api.github.com/repos/cloudflare/cloudflared/releases/latest | jq -r '.assets[] | select(.name | contains("linux-amd64")) | .browser_download_url')
-        else
-            CLOUDFLARED_DOWNLOAD_URL="https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64"
-        fi
-        log "下载 cloudflared: $CLOUDFLARED_DOWNLOAD_URL"
-        curl -L "$CLOUDFLARED_DOWNLOAD_URL" -o "$INSTALL_DIR/cloudflared"
-        chmod +x "$INSTALL_DIR/cloudflared"
-    fi
-    log "cloudflared 安装完成。"
+  if command -v cloudflared &>/dev/null; then
+    log "cloudflared is already installed."
+    return
+  fi
+
+  log "Installing cloudflared version $CLOUDFLARED_VERSION..."
+  CLOUDFLARED_URL="https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64"
+  TEMP_DIR=$(mktemp -d)
+  wget -O "$TEMP_DIR/cloudflared" "$CLOUDFLARED_URL" || error_exit "Failed to download cloudflared."
+  chmod +x "$TEMP_DIR/cloudflared"
+  sudo mv "$TEMP_DIR/cloudflared" /usr/local/bin/ || error_exit "Failed to move cloudflared binary."
+  rm -rf "$TEMP_DIR"
+  log "cloudflared installed successfully."
+
+  # Create cloudflared service
+  if [ ! -f "/etc/systemd/system/cloudflared.service" ]; then
+    log "Creating cloudflared systemd service..."
+    cat <<EOF | sudo tee /etc/systemd/system/cloudflared.service > /dev/null
+[Unit]
+Description=Cloudflared Tunnel
+After=network.target
+
+[Service]
+TimeoutStartSec=0
+ExecStart=/usr/local/bin/cloudflared tunnel run --config ${CLOUDFLARED_CONFIG_PATH} ${CLOUDFLARED_TUNNEL_ID}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    sudo systemctl daemon-reload || error_exit "Failed to reload systemd daemon."
+    sudo systemctl enable cloudflared || error_exit "Failed to enable cloudflared service."
+    log "cloudflared service created."
+  fi
 }
 
-# 配置 sing-box
+# --- Configuration Functions ---
+
 configure_singbox() {
-    log "正在配置 sing-box..."
-    cat <<EOF > "$SINGBOX_CONFIG_DIR/config.json"
+  log "Configuring sing-box..."
+  sudo mkdir -p /etc/sing-box
+  cat <<EOF | sudo tee "$SINGBOX_CONFIG_PATH" > /dev/null
 {
   "log": {
     "level": "info",
@@ -98,235 +116,202 @@ configure_singbox() {
   "inbounds": [
     {
       "type": "vless",
-      "tag": "vless-in",
       "listen": "127.0.0.1",
-      "listen_port": $VLESS_PORT,
-      "uuid": "$VLESS_UUID",
-      "limit": 0,
-      "clients": [],
-      "decryption": "none",
-      "allow_insecure": false
+      "listen_port": 10000,
+      "users": [
+        {
+          "uuid": "$VLESS_UUID",
+          "flow": "xtls-rprx-vision"
+        }
+      ],
+      "transport": {
+        "type": "tcp",
+        "tcp_splitting": true
+      },
+      "tls": {
+        "enabled": true,
+        "server_name": "$CLOUDFLARED_DOMAIN",
+        "reality": {
+          "enabled": true,
+          "handshake_bytes": "ff00000000000000000000000000000000000000000000000000000000000000",
+          "private_key": "$(sing-box generate reality-keypair -k)",
+          "short_id": "$(sing-box generate reality-keypair -s)"
+        }
+      }
     },
     {
       "type": "vmess",
-      "tag": "vmess-in",
       "listen": "127.0.0.1",
-      "listen_port": $VMESS_PORT,
-      "uuid": "$VMESS_UUID",
-      "limit": 0,
-      "clients": [],
-      "detour": ""
+      "listen_port": 10001,
+      "users": [
+        {
+          "uuid": "$VMESS_UUID"
+        }
+      ],
+      "transport": {
+        "type": "tcp",
+        "tcp_splitting": true
+      }
     },
     {
       "type": "trojan",
-      "tag": "trojan-in",
       "listen": "127.0.0.1",
-      "listen_port": $TROJAN_PORT,
+      "listen_port": 10002,
       "password": [
         "$TROJAN_PASSWORD"
       ],
-      "limit": 0,
-      "fallback": null,
-      "fallback_port": 0,
-      "fallback_detour": ""
+      "transport": {
+        "type": "tcp",
+        "tcp_splitting": true
+      },
+      "tls": {
+        "enabled": true,
+        "server_name": "$CLOUDFLARED_DOMAIN",
+        "reality": {
+          "enabled": true,
+          "handshake_bytes": "ff00000000000000000000000000000000000000000000000000000000000000",
+          "private_key": "$(sing-box generate reality-keypair -k)",
+          "short_id": "$(sing-box generate reality-keypair -s)"
+        }
+      }
     }
   ],
   "outbounds": [
     {
-      "type": "direct",
-      "tag": "direct"
-    },
-    {
-      "type": "block",
-      "tag": "block"
+      "type": "direct"
     }
-  ],
-  "route": {
-    "rules": [
-      {
-        "protocol": "vless",
-        "inbound": "vless-in",
-        "outbound": "direct"
-      },
-       {
-        "protocol": "vmess",
-        "inbound": "vmess-in",
-        "outbound": "direct"
-      },
-       {
-        "protocol": "trojan",
-        "inbound": "trojan-in",
-        "outbound": "direct"
-      }
-    ],
-    "final": "direct"
-  }
+  ]
 }
 EOF
-    log "sing-box 配置完成。"
-}
+  log "sing-box configuration created."
 
-# 配置 cloudflared
-configure_cloudflared() {
-    log "正在配置 cloudflared..."
-    read -p "请输入你的 Cloudflare Tunnel Token: " CF_TUNNEL_TOKEN
-    mkdir -p "$CLOUDFLARED_CONFIG_DIR"
-    cat <<EOF > "$CLOUDFLARED_CONFIG_DIR/config.yml"
-tunnel: $(echo "$CF_TUNNEL_TOKEN" | cut -d'.' -f1)
-credentials-file: $CLOUDFLARED_CONFIG_DIR/$(echo "$CF_TUNNEL_TOKEN" | cut -d'.' -f1).json
-protocol: http2
-
-ingress:
-  - hostname: vless.YOUR_DOMAIN.COM  # 替换为你的域名
-    service: http://127.0.0.1:$VLESS_PORT
-  - hostname: vmess.YOUR_DOMAIN.COM  # 替换为你的域名
-    service: http://127.0.0.1:$VMESS_PORT
-  - hostname: trojan.YOUR_DOMAIN.COM  # 替换为你的域名
-    service: http://127.0.0.1:$TROJAN_PORT
-  - service: http_status:404
-EOF
-    log "cloudflared 配置完成。请手动替换 config.yml 中的 YOUR_DOMAIN.COM 为你的实际域名。"
-}
-
-# 配置 sing-box systemd user unit
-configure_singbox_systemd_user_unit() {
-    log "正在配置 sing-box systemd user unit..."
-    mkdir -p "$SYSTEMD_USER_DIR"
-    cat <<EOF > "$SYSTEMD_USER_DIR/sing-box.service"
+  # Create sing-box service
+  if [ ! -f "/etc/systemd/system/sing-box.service" ]; then
+    log "Creating sing-box systemd service..."
+    cat <<EOF | sudo tee /etc/systemd/system/sing-box.service > /dev/null
 [Unit]
 Description=sing-box service
-After=network.target
+Documentation=https://sing-box.sagernet.org/
+After=network.target nss-lookup.target
 
 [Service]
-ExecStart=$INSTALL_DIR/sing-box run -c $SINGBOX_CONFIG_DIR/config.json
+User=root
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+ExecStart=/usr/local/bin/sing-box run -c ${SINGBOX_CONFIG_PATH}
+ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
-RestartSec=5
+RestartPreventExitStatus=23
+LimitNPROC=5000
+LimitNOFILE=100000
+WorkingDirectory=/etc/sing-box/
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
 EOF
-    systemctl --user daemon-reload
-    systemctl --user enable sing-box
-    log "sing-box systemd user unit 配置完成。"
+    sudo systemctl daemon-reload || error_exit "Failed to reload systemd daemon."
+    sudo systemctl enable sing-box || error_exit "Failed to enable sing-box service."
+    log "sing-box service created."
+  fi
 }
 
-# 配置 cloudflared systemd user unit
-configure_cloudflared_systemd_user_unit() {
-    log "正在配置 cloudflared systemd user unit..."
-    mkdir -p "$SYSTEMD_USER_DIR"
-    cat <<EOF > "$SYSTEMD_USER_DIR/cloudflared.service"
-[Unit]
-Description=Cloudflared Tunnel
-After=network.target
+configure_cloudflared() {
+  log "Configuring cloudflared..."
+  sudo mkdir -p /etc/cloudflared
+  cat <<EOF | sudo tee "$CLOUDFLARED_CONFIG_PATH" > /dev/null
+tunnel: ${CLOUDFLARED_TUNNEL_ID}
+credentials-file: /etc/cloudflared/${CLOUDFLARED_TUNNEL_ID}.json
 
-[Service]
-ExecStart=$INSTALL_DIR/cloudflared tunnel --config $CLOUDFLARED_CONFIG_DIR/config.yml run
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=default.target
+ingress:
+  - hostname: vless.${CLOUDFLARED_DOMAIN}
+    service: http://127.0.0.1:10000
+  - hostname: vmess.${CLOUDFLARED_DOMAIN}
+    service: http://127.0.0.1:10001
+  - hostname: trojan.${CLOUDFLARED_DOMAIN}
+    service: http://127.0.0.1:10002
+  - service: http_status:404
 EOF
-    systemctl --user daemon-reload
-    systemctl --user enable cloudflared
-    log "cloudflared systemd user unit 配置完成。"
+
+  if [ ! -f "/etc/cloudflared/${CLOUDFLARED_TUNNEL_ID}.json" ]; then
+    log "Creating cloudflared credentials file. Please paste your tunnel credentials JSON content when prompted."
+    read -p "Paste your tunnel credentials JSON here and press Enter: " TUNNEL_CREDENTIALS
+    echo "$TUNNEL_CREDENTIALS" | sudo tee "/etc/cloudflared/${CLOUDFLARED_TUNNEL_ID}.json" > /dev/null || error_exit "Failed to write tunnel credentials."
+  fi
+
+  log "cloudflared configuration created."
 }
 
-
-# 生成客户端配置/链接
 generate_client_configs() {
-    log "正在生成客户端配置/链接..."
-    echo "--- VLESS ---"
-    echo "地址: YOUR_DOMAIN.COM"  # 替换为你的域名
-    echo "端口: 443 (通过 Cloudflare)"
-    echo "UUID: $VLESS_UUID"
-    echo "传输协议: ws"
-    echo "路径: /vless" # 需要在 Cloudflare Workers 或其他方式中配置路径转发
-    echo "TLS: 是"
-    echo "SNI: YOUR_DOMAIN.COM" # 替换为你的域名
-    echo "指纹: 自动"
-    echo "跳过证书验证: 否"
-    echo "VLESS 链接 (需要手动添加路径和Host):"
-    echo "vless://$VLESS_UUID@YOUR_DOMAIN.COM:443?encryption=none&security=tls&type=ws&host=YOUR_DOMAIN.COM&path=/vless#VLESS_Argo"
+  log "Generating client configurations:"
+  echo "--- VLESS Configuration ---"
+  echo "Protocol: vless"
+  echo "Address: vless.${CLOUDFLARED_DOMAIN}"
+  echo "Port: 443"
+  echo "UUID: $VLESS_UUID"
+  echo "Flow: xtls-rprx-vision"
+  echo "TLS: true"
+  echo "Reality: true"
+  # Note: You need to get the public key and short ID from the sing-box log or config after it runs.
+  echo "Public Key: Find in sing-box log/config"
+  echo "Short ID: Find in sing-box log/config"
+  echo ""
 
-    echo ""
-    echo "--- VMESS ---"
-    echo "地址: YOUR_DOMAIN.COM"  # 替换为你的域名
-    echo "端口: 443 (通过 Cloudflare)"
-    echo "UUID: $VMESS_UUID"
-    echo "传输协议: ws"
-    echo "路径: /vmess" # 需要在 Cloudflare Workers 或其他方式中配置路径转发
-    echo "TLS: 是"
-    echo "SNI: YOUR_DOMAIN.COM" # 替换为你的域名
-    echo "VMESS 链接 (需要手动添加路径和Host):"
-    VMESS_CONFIG=$(cat <<EOF
-{
-  "v": "2",
-  "ps": "VMESS_Argo",
-  "add": "YOUR_DOMAIN.COM", # 替换为你的域名
-  "port": "443",
-  "id": "$VMESS_UUID",
-  "aid": "0",
-  "net": "ws",
-  "type": "none",
-  "host": "YOUR_DOMAIN.COM", # 替换为你的域名
-  "path": "/vmess",
-  "tls": "tls",
-  "sni": "YOUR_DOMAIN.COM" # 替换为你的域名
-}
-EOF
-)
-    echo "vmess://$(echo "$VMESS_CONFIG" | base64 -w 0)"
+  echo "--- VMESS Configuration ---"
+  echo "Protocol: vmess"
+  echo "Address: vmess.${CLOUDFLARED_DOMAIN}"
+  echo "Port: 443"
+  echo "UUID: $VMESS_UUID"
+  echo "TLS: true"
+  echo ""
 
-    echo ""
-    echo "--- TROJAN ---"
-    echo "地址: YOUR_DOMAIN.COM"  # 替换为你的域名
-    echo "端口: 443 (通过 Cloudflare)"
-    echo "密码: $TROJAN_PASSWORD"
-    echo "传输协议: ws"
-    echo "路径: /trojan" # 需要在 Cloudflare Workers 或其他方式中配置路径转发
-    echo "TLS: 是"
-    echo "SNI: YOUR_DOMAIN.COM" # 替换为你的域名
-    echo "跳过证书验证: 否"
-    echo "TROJAN 链接 (需要手动添加路径和Host):"
-    echo "trojan://$TROJAN_PASSWORD@YOUR_DOMAIN.COM:443?security=tls&type=ws&host=YOUR_DOMAIN.COM&path=/trojan#TROJAN_Argo"
-
-    log "客户端配置/链接生成完成。请手动替换 YOUR_DOMAIN.COM 为你的实际域名，并根据需要配置 Cloudflare Workers 或其他方式进行路径转发。"
+  echo "--- TROJAN Configuration ---"
+  echo "Protocol: trojan"
+  echo "Address: trojan.${CLOUDFLARED_DOMAIN}"
+  echo "Port: 443"
+  echo "Password: $TROJAN_PASSWORD"
+  echo "TLS: true"
+  echo "Reality: true"
+  # Note: You need to get the public key and short ID from the sing-box log or config after it runs.
+  echo "Public Key: Find in sing-box log/config"
+  echo "Short ID: Find in sing-box log/config"
+  echo ""
 }
 
+start_services() {
+  log "Starting sing-box service..."
+  sudo systemctl start sing-box || error_exit "Failed to start sing-box service."
+  log "sing-box service started."
 
-# 主函数
-main() {
-    log "脚本开始执行..."
-
-    install_dependencies
-    install_singbox
-    install_cloudflared
-    configure_singbox
-    configure_cloudflared
-    configure_singbox_systemd_user_unit
-    configure_cloudflared_systemd_user_unit
-
-    log "启动 sing-box 和 cloudflared 服务..."
-    systemctl --user start sing-box
-    systemctl --user start cloudflared
-
-    log "等待服务启动..."
-    sleep 5
-
-    systemctl --user status sing-box --no-pager
-    systemctl --user status cloudflared --no-pager
-
-    generate_client_configs
-
-    log "脚本执行完毕。"
-    echo "请检查上面的日志和客户端配置。"
-    echo "日志文件位于: $LOG_FILE"
-    echo "sing-box 配置文件位于: $SINGBOX_CONFIG_DIR/config.json"
-    echo "cloudflared 配置文件位于: $CLOUDFLARED_CONFIG_DIR/config.yml"
-    echo "sing-box systemd user unit 位于: $SYSTEMD_USER_DIR/sing-box.service"
-    echo "cloudflared systemd user unit 位于: $SYSTEMD_USER_DIR/cloudflared.service"
-    echo "请手动替换 config.yml 和客户端配置中的 YOUR_DOMAIN.COM 为你的实际域名，并在 Cloudflare Workers 或其他方式中配置路径转发。"
+  log "Starting cloudflared service..."
+  sudo systemctl start cloudflared || error_exit "Failed to start cloudflared service."
+  log "cloudflared service started."
 }
 
-main
+# --- Main Script ---
+
+log "Starting VPS setup script..."
+
+# Check if running as root
+if [ "$EUID" -ne 0 ]; then
+  error_exit "Please run this script as root."
+fi
+
+# Install necessary packages
+install_package "wget"
+install_package "tar"
+install_package "uuidgen"
+install_package "openssl"
+
+# Install and configure sing-box and cloudflared
+install_singbox
+install_cloudflared
+configure_singbox
+configure_cloudflared
+
+# Start the services
+start_services
+
+# Generate client configurations
+generate_client_configs
+
+log "VPS setup script finished."
