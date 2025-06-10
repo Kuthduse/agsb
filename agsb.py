@@ -865,7 +865,7 @@ cd {INSTALL_DIR}
         if DOMAIN and TOKEN:
             f.write(f'''#!/bin/bash
     cd {INSTALL_DIR}
-    ./cloudflared tunnel run --token {TOKEN} > argo.log 2>&1 & echo $! > sbargopid.log
+    ./cloudflared tunnel --no-autoupdate run --token {TOKEN} > argo.log 2>&1 & echo $! > sbargopid.log
     ''')
         else:
             f.write(f'''#!/bin/bash
