@@ -27,6 +27,11 @@ ARGO_PID_FILE = INSTALL_DIR / "sbargopid.log"
 LIST_FILE = INSTALL_DIR / "list.txt"
 LOG_FILE = INSTALL_DIR / "argo.log"
 DEBUG_LOG = INSTALL_DIR / "python_debug.log"
+UUID = ''
+PORT = 0
+DOMAIN = ''
+TOKEN =''
+
 
 # 网络请求函数
 def http_get(url, timeout=10):
@@ -66,17 +71,7 @@ def download_file(url, target_path, mode='wb'):
         print(f"下载文件失败: {url}, 错误: {e}")
         return False
 
-# 脚本信息
-def print_info():
-    print("\033[36m╭───────────────────────────────────────────────────────────────╮\033[0m")
-    print("\033[36m│                \033[33m✨ ArgoSB Python3 一键脚本 ✨               \033[36m│\033[0m")
-    print("\033[36m├───────────────────────────────────────────────────────────────┤\033[0m")
-    print("\033[36m│ \033[32m作者: 康康                                                  \033[36m│\033[0m")
-    print("\033[36m│ \033[32mGithub: https://github.com/zhumengkang/                    \033[36m│\033[0m")
-    print("\033[36m│ \033[32mYouTube: https://www.youtube.com/@康康的V2Ray与Clash         \033[36m│\033[0m")
-    print("\033[36m│ \033[32mTelegram: https://t.me/+WibQp7Mww1k5MmZl                   \033[36m│\033[0m")
-    print("\033[36m│ \033[32m版本: 25.5.30 (仅支持Python 3)                             \033[36m│\033[0m")
-    print("\033[36m╰───────────────────────────────────────────────────────────────╯\033[0m")
+
 
 # 打印使用帮助信息
 def print_usage():
@@ -403,11 +398,7 @@ def generate_links(domain, port_vm_ws, uuid_str):
         f.write("- 查看所有节点(一行一个): `python3 agsb.py cat`\n")
         f.write("- 升级脚本: `python3 agsb.py update`\n")
         f.write("- 卸载脚本: `python3 agsb.py del`\n\n")
-        
-        f.write("## 注意事项\n\n")
-        f.write("- 该脚本由康康开发，更多信息请访问 [GitHub项目](https://github.com/zhumengkang/)\n")
-        f.write("- YouTube频道: [康康的V2Ray与Clash](https://www.youtube.com/@康康的V2Ray与Clash)\n")
-        f.write("- Telegram频道: [https://t.me/+WibQp7Mww1k5MmZl](https://t.me/+WibQp7Mww1k5MmZl)\n")
+
     
     # 打印节点信息
     print("\033[36m╭───────────────────────────────────────────────────────────────╮\033[0m")
@@ -555,8 +546,14 @@ def install():
                 sys.exit(1)
     
     # 生成配置
-    uuid_str = str(uuid.uuid4())
-    port_vm_ws = random.randint(10000, 65535)  # 随机生成端口
+    if UUID:
+        uuid_str = UUID
+    else:
+        uuid_str = str(uuid.uuid4())
+    if PORT:
+        port_vm_ws = PORT
+    else:
+        port_vm_ws = random.randint(10000, 65535)  # 随机生成端口
     
     # 创建配置文件
     config_data = {
@@ -584,7 +581,10 @@ def install():
     start_services()
     
     # 尝试获取域名和生成链接
-    domain = get_tunnel_domain()
+    if DOMAIN:
+        domain = DOMAIN
+    else:
+        domain = get_tunnel_domain()
     if domain:
         generate_links(domain, port_vm_ws, uuid_str)
         
@@ -698,22 +698,7 @@ def uninstall():
     print("卸载完成")
     sys.exit(0)
 
-# 升级脚本
-def upgrade():
-    try:
-        script_content = http_get("https://raw.githubusercontent.com/yonggekkk/argosb/main/argosb.py")
-        if script_content:
-            script_path = Path(__file__).resolve()
-            with open(str(script_path), 'w') as f:
-                f.write(script_content)
-            os.chmod(str(script_path), 0o755)
-            print("升级完成")
-        else:
-            print("升级失败，无法下载最新脚本")
-    except Exception as e:
-        print("升级过程中出错: {}".format(e))
-    
-    sys.exit(0)
+
 
 # 检查脚本运行状态
 def check_status():
@@ -877,9 +862,13 @@ cd {INSTALL_DIR}
     # 创建cloudflared启动脚本
     cf_start_script = INSTALL_DIR / "start_cf.sh"
     with open(str(cf_start_script), 'w') as f:
+        if DOMAIN and TOKEN:
+            up_str = '2048 --token {TOKEN}'
+        else:
+            up_str = '2048'
         f.write(f'''#!/bin/bash
 cd {INSTALL_DIR}
-./cloudflared tunnel --url http://localhost:{port_vm_ws}/$(cat config.json | grep -o '"uuid_str":"[^"]*"' | cut -d'"' -f4)-vm?ed=2048 --edge-ip-version auto --no-autoupdate --protocol http2 > argo.log 2>&1 & echo $! > sbargopid.log
+./cloudflared tunnel --url http://localhost:{port_vm_ws}/$(cat config.json | grep -o '"uuid_str":"[^"]*"' | cut -d'"' -f4)-vm?ed={up_str} --edge-ip-version auto --no-autoupdate --protocol http2 > argo.log 2>&1 & echo $! > sbargopid.log
 ''')
     os.chmod(str(cf_start_script), 0o755)
     
@@ -928,19 +917,20 @@ def get_tunnel_domain():
 
 # 主函数
 def main():
-    print_info()
-    
+    global UUID,PORT,DOMAIN,TOKEN
     # 检查命令行参数
     if len(sys.argv) > 1:
         action = sys.argv[1].lower()
         if action == "install":
+            if len(sys.argv) > 5:
+                UUID = sys.argv[2]
+                PORT = int(sys.argv[3])
+                DOMAIN = sys.argv[4]
+                TOKEN = sys.argv[5]
             install()
             sys.exit(0)
         elif action in ["uninstall", "del", "delete", "remove"]:
             uninstall()
-            sys.exit(0)
-        elif action == "update" or action == "upgrade":
-            upgrade()
             sys.exit(0)
         elif action == "status":
             if not check_status():
