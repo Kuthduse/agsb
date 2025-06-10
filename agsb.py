@@ -863,13 +863,15 @@ cd {INSTALL_DIR}
     cf_start_script = INSTALL_DIR / "start_cf.sh"
     with open(str(cf_start_script), 'w') as f:
         if DOMAIN and TOKEN:
-            up_str = '2048 --token {TOKEN}'
+            f.write(f'''#!/bin/bash
+    cd {INSTALL_DIR}
+    ./cloudflared tunnel run --token {TOKEN} > argo.log 2>&1 & echo $! > sbargopid.log
+    ''')
         else:
-            up_str = '2048'
-        f.write(f'''#!/bin/bash
-cd {INSTALL_DIR}
-./cloudflared tunnel --url http://localhost:{port_vm_ws}/$(cat config.json | grep -o '"uuid_str":"[^"]*"' | cut -d'"' -f4)-vm?ed={up_str} --edge-ip-version auto --no-autoupdate --protocol http2 > argo.log 2>&1 & echo $! > sbargopid.log
-''')
+            f.write(f'''#!/bin/bash
+    cd {INSTALL_DIR}
+    ./cloudflared tunnel --url http://localhost:{port_vm_ws}/$(cat config.json | grep -o '"uuid_str":"[^"]*"' | cut -d'"' -f4)-vm?ed=2048 --edge-ip-version auto --no-autoupdate --protocol http2 > argo.log 2>&1 & echo $! > sbargopid.log
+    ''')
     os.chmod(str(cf_start_script), 0o755)
     
     write_debug_log("启动脚本已创建")
